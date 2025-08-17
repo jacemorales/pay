@@ -1,0 +1,12 @@
+{
+    "require": {
+        "yabacon/paystack-php": "*",
+        "vlucas/phpdotenv": "*",
+        "phpmailer/phpmailer": "*",
+        "phpunit/phpunit": "*",
+        "scrutinizer/ocular": "*",
+        "guzzlehttp/guzzle": "*",
+        "squizlabs/php_codesniffer": "*"
+    }
+}
+
