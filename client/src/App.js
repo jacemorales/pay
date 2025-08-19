@@ -54,17 +54,6 @@ const PaymentResult = ({ status, reference, data, onTryAgain, onNewPayment, onCh
 };
 
 // === Reference Management ===
-const getActiveReferenceSession = () => {
-    let id = localStorage.getItem('activeReferenceSession');
-    if (!id) {
-        const timestamp = Date.now();
-        const random = Math.random().toString(36).substr(2, 8).toUpperCase();
-        id = `RESEARCH_HUB_${timestamp}_${random}`;
-        localStorage.setItem('activeReferenceSession', id);
-    }
-    return id;
-};
-
 const generatePaystackRef = () => {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substr(2, 8).toUpperCase();
@@ -86,7 +75,15 @@ function App() {
 
   useEffect(() => {
     const numericAmount = parseFloat(amount) || 0;
-    const calculatedFee = numericAmount * PAYSTACK_PERCENTAGE_FEE;
+    // The fee is 1.5% capped at ₦2000.
+    // Let's add the full logic for fee calculation.
+    let calculatedFee = numericAmount * PAYSTACK_PERCENTAGE_FEE;
+    if (numericAmount >= 2500) {
+        calculatedFee += 100;
+    }
+    if (calculatedFee > 2000) {
+        calculatedFee = 2000;
+    }
     const calculatedTotal = numericAmount + calculatedFee;
 
     setFee(calculatedFee);
@@ -108,21 +105,14 @@ function App() {
     setLoaderMessage('Verifying payment...');
 
     try {
-      const response = await fetch(`/verify.php?reference=${encodeURIComponent(reference)}`);
+      const response = await fetch(`/api/verify?reference=${encodeURIComponent(reference)}`);
       const data = await response.json();
 
       if (response.ok) {
-        if (data.status === 'success') {
-          setResult({ status: data.payment_status, reference, data: data.data });
-        } else if (data.status === 'pending') {
-          setResult({ status: 'pending', reference, data: data.data });
-        } else {
-          showNotification(data.message || 'Verification failed', 'error');
-          setResult({ status: 'failed', reference, data: data.data });
-        }
+        setResult({ status: data.status, reference, data: data });
       } else {
         showNotification(data.message || 'Verification failed', 'error');
-        setResult({ status: 'failed', reference, data: data.data });
+        setResult({ status: 'failed', reference, data: data });
       }
     } catch (error) {
       showNotification('An error occurred during verification.', 'error');
@@ -162,27 +152,28 @@ function App() {
 
     const paystackRef = generatePaystackRef();
     setCurrentPaystackRef(paystackRef);
-    const activeSession = getActiveReferenceSession();
+
+    // We send the total amount to the backend
+    const amountToPay = total;
 
     try {
-      const response = await fetch('/initialize.php', {
+      const response = await fetch('/api/initialize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           email,
-          amount: parseFloat(amount),
+          amount: amountToPay,
           reference: paystackRef,
-          reference_stat: activeSession,
         }),
       });
 
       const data = await response.json();
 
-      if (response.ok && data.status === 'success') {
+      if (response.ok) {
         setLoaderMessage('Opening payment window...');
-        const popup = openCenterPopup(data.data.authorization_url);
+        const popup = openCenterPopup(data.authorization_url);
 
         const popupWatch = setInterval(() => {
             if (popup && popup.closed) {
@@ -206,7 +197,6 @@ function App() {
     setAmount('');
     setResult(null);
     setCurrentPaystackRef(null);
-    localStorage.removeItem('activeReferenceSession');
   }
 
   const handleTryAgain = () => {
@@ -265,7 +255,7 @@ function App() {
               onChange={(e) => setAmount(e.target.value)}
               disabled={loading}
             />
-            <div className="fee-info"><i>i</i> Fee (1.5% displayed): ₦<span id="fee-amount">{fmt(fee)}</span></div>
+            <div className="fee-info"><i>i</i> Fee (display): ₦<span id="fee-amount">{fmt(fee)}</span></div>
             <div className="fee-info"><i>i</i> Total (display): ₦<span id="total-amount">{fmt(total)}</span></div>
           </div>
 
@@ -281,7 +271,7 @@ function App() {
     <div className="payment-card">
       <div className="payment-header">
         <h2>User Form</h2>
-        <p className="sub">Enter your email and amount. Fee (1.5%) shown for reference.</p>
+        <p className="sub">Enter your email and amount. Fee shown for reference.</p>
       </div>
 
       {renderContent()}
