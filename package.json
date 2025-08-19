@@ -19,7 +19,8 @@
     "react-scripts": "5.0.1",
     "web-vitals": "^2.1.4",
     "axios": "^0.21.1",
-    "mysql2": "^2.3.3"
+    "mysql2": "^2.3.3",
+    "nodemailer": "^6.7.2"
   },
   "eslintConfig": {
     "extends": [
