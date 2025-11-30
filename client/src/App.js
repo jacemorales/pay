@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './main.css';
+import { saveRef, loadRef, clearRef } from './idbHelper';
 
-const PAYSTACK_PERCENTAGE_FEE = 0.015;
+const PAYSTACK_PERCENTAGE_FEE = 0.1;
 
 // === Helper components ===
 
@@ -60,6 +61,18 @@ const generatePaystackRef = () => {
     return `PS_${timestamp}_${random}`;
 };
 
+// === Browser/Device Detection ===
+const isProblematicBrowser = () => {
+    const ua = navigator.userAgent.toLowerCase();
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    const isIOS = /ipad|iphone|ipod/.test(ua) && !window.MSStream;
+    const isFacebookInApp = (ua.indexOf('fban') > -1) || (ua.indexOf('fbav') > -1);
+    const isTelegramInApp = (ua.indexOf('telegram') > -1);
+
+    // Safari on macOS and all iOS browsers are problematic due to ITP and popup blocking.
+    return isSafari || isIOS || isFacebookInApp || isTelegramInApp;
+};
+
 
 function App() {
   const [email, setEmail] = useState('');
@@ -67,16 +80,15 @@ function App() {
   const [fee, setFee] = useState(0);
   const [total, setTotal] = useState(0);
 
-  const [loading, setLoading] = useState(false);
-  const [loaderMessage, setLoaderMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loaderMessage, setLoaderMessage] = useState('Loading...');
   const [notification, setNotification] = useState(null);
   const [result, setResult] = useState(null);
   const [currentPaystackRef, setCurrentPaystackRef] = useState(null);
 
   useEffect(() => {
+    // The fee is 10% plus a ₦100 flat fee for amounts >= ₦2500, capped at ₦2000.
     const numericAmount = parseFloat(amount) || 0;
-    // The fee is 1.5% capped at ₦2000.
-    // Let's add the full logic for fee calculation.
     let calculatedFee = numericAmount * PAYSTACK_PERCENTAGE_FEE;
     if (numericAmount >= 2500) {
         calculatedFee += 100;
@@ -110,6 +122,9 @@ function App() {
 
       if (response.ok) {
         setResult({ status: data.status, reference, data: data });
+        if (data.status === 'success') {
+          await clearRef();
+        }
       } else {
         showNotification(data.message || 'Verification failed', 'error');
         setResult({ status: 'failed', reference, data: data });
@@ -123,13 +138,26 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const ref = params.get('reference');
-    if (ref) {
-      setCurrentPaystackRef(ref);
-      pollVerification(ref);
-      window.history.replaceState({}, '', window.location.pathname);
-    }
+    const initialize = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const refFromUrl = params.get('reference');
+
+      if (refFromUrl) {
+        await saveRef(refFromUrl);
+        setCurrentPaystackRef(refFromUrl);
+        await pollVerification(refFromUrl);
+        window.history.replaceState({}, '', window.location.pathname);
+      } else {
+        const refFromDb = await loadRef();
+        if (refFromDb) {
+          setCurrentPaystackRef(refFromDb);
+          await pollVerification(refFromDb);
+        } else {
+          setLoading(false);
+        }
+      }
+    };
+    initialize();
   }, [pollVerification]);
 
   const openCenterPopup = (url, w = 600, h = 700) => {
@@ -138,6 +166,31 @@ function App() {
     return window.open(url, 'pay_popup', `toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=${w},height=${h},top=${top},left=${left}`);
   };
 
+  const openPaymentPopupOrRedirect = (url, paystackRef) => {
+    const isProblematic = isProblematicBrowser();
+    const isInIframe = window.top !== window.self;
+
+    if (isProblematic || isInIframe) {
+      setLoaderMessage('Redirecting to payment page...');
+      window.location.href = url;
+      return;
+    }
+
+    const popup = openCenterPopup(url);
+
+    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+      setLoaderMessage('Popup blocked. Redirecting...');
+      window.location.href = url;
+    } else {
+      setLoaderMessage('Opening payment window...');
+      const popupWatch = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(popupWatch);
+          pollVerification(paystackRef);
+        }
+      }, 700);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -151,9 +204,9 @@ function App() {
     setLoaderMessage('Initializing payment...');
 
     const paystackRef = generatePaystackRef();
+    await saveRef(paystackRef);
     setCurrentPaystackRef(paystackRef);
 
-    // We send the total amount to the backend
     const amountToPay = total;
 
     try {
@@ -172,16 +225,7 @@ function App() {
       const data = await response.json();
 
       if (response.ok) {
-        setLoaderMessage('Opening payment window...');
-        const popup = openCenterPopup(data.authorization_url);
-
-        const popupWatch = setInterval(() => {
-            if (popup && popup.closed) {
-                clearInterval(popupWatch);
-                pollVerification(paystackRef);
-            }
-        }, 700);
-
+        openPaymentPopupOrRedirect(data.authorization_url, paystackRef);
       } else {
         showNotification(data.message || 'Initialization failed', 'error');
         setLoading(false);
@@ -192,19 +236,20 @@ function App() {
     }
   };
 
-  const resetForm = () => {
+  const resetForm = async () => {
     setEmail('');
     setAmount('');
     setResult(null);
     setCurrentPaystackRef(null);
+    await clearRef();
   }
 
   const handleTryAgain = () => {
     setResult(null);
   };
 
-  const handleNewPayment = () => {
-    resetForm();
+  const handleNewPayment = async () => {
+    await resetForm();
   };
 
   const handleCheckStatus = () => {
